@@ -2,7 +2,6 @@ import hashlib
 import json
 import os
 import shutil
-import sys
 
 import numpy as np
 
@@ -11,8 +10,8 @@ from sklearn.model_selection import ParameterSampler
 from spotlight.datasets.movielens import get_movielens_dataset
 from spotlight.cross_validation import user_based_train_test_split
 from spotlight.sequence.implicit import ImplicitSequenceModel
-from spotlight.sequence.representations import CNNNet
 from spotlight.evaluation import sequence_mrr_score
+import lenskit.datasets as d
 
 
 CUDA = (os.environ.get('CUDA') is not None or
@@ -20,12 +19,12 @@ CUDA = (os.environ.get('CUDA') is not None or
 
 NUM_SAMPLES = 100
 
-LEARNING_RATES = [1e-3, 1e-2, 5 * 1e-2, 1e-1]
-LOSSES = ['bpr', 'hinge', 'adaptive_hinge', 'pointwise']
-BATCH_SIZE = [8, 16, 32, 256]
-EMBEDDING_DIM = [8, 16, 32, 64, 128, 256]
-N_ITER = list(range(5, 20))
-L2 = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.0]
+LEARNING_RATES = [1e-3]
+LOSSES = ['pointwise']
+BATCH_SIZE = [8]
+EMBEDDING_DIM = [8]
+N_ITER = [9]
+L2 = [1e-6]
 
 
 class Results:
@@ -111,6 +110,18 @@ def sample_lstm_hyperparameters(random_state, num):
 
         yield params
 
+
+def get_k_recommendations(k=5):
+    results = sorted([x for x in self], key=lambda x: -x['test_mrr'])
+    return results[:k] if results else None
+
+def get_movie_from_id(id):
+    return d.ML100K('../../dataset/ml-100k/ml-100k').movies.iloc[id].title
+
+def id_from_movie(given_movie):
+    movies = d.ML100K('../../dataset/ml-100k/ml-100k').movies
+    return movies.index[movies['title'] == given_movie].tolist()[0]
+
 def evaluate_lstm_model(hyperparameters, train, test, validation, random_state):
 
     h = hyperparameters
@@ -129,9 +140,9 @@ def evaluate_lstm_model(hyperparameters, train, test, validation, random_state):
     test_mrr = sequence_mrr_score(model, test)
     val_mrr = sequence_mrr_score(model, validation)
 
-    return test_mrr, val_mrr
+    return test_mrr, val_mrr, model
 
-def run(train, test, validation, ranomd_state, model_type):
+def run(train, test, validation, random_state, model_type):
 
     results = Results('{}_results.txt'.format(model_type))
 
@@ -139,7 +150,7 @@ def run(train, test, validation, ranomd_state, model_type):
 
     eval_fnc, sample_fnc = (evaluate_lstm_model,
                                 sample_lstm_hyperparameters)
-
+    model = None
     if best_result is not None:
         print('Best {} result: {}'.format(model_type, results.best()))
 
@@ -150,7 +161,7 @@ def run(train, test, validation, ranomd_state, model_type):
 
         print('Evaluating {}'.format(hyperparameters))
 
-        (test_mrr, val_mrr) = eval_fnc(hyperparameters,
+        (test_mrr, val_mrr, model) = eval_fnc(hyperparameters,
                                        train,
                                        test,
                                        validation,
@@ -159,10 +170,14 @@ def run(train, test, validation, ranomd_state, model_type):
         print('Test MRR {} val MRR {}'.format(
             test_mrr.mean(), val_mrr.mean()
         ))
+        test_input = [50, 176, 172, 69, 235]
+        p = model.predict(test_input)
+        print(np.argmax(p))
+        print("I should watch ", get_movie_from_id(np.argmax(p)))
 
         results.save(hyperparameters, test_mrr.mean(), val_mrr.mean())
 
-    return results
+    return results, model
 
 
 if __name__ == '__main__':
@@ -182,6 +197,7 @@ if __name__ == '__main__':
     train = train.to_sequence(max_sequence_length=max_sequence_length,
                               min_sequence_length=min_sequence_length,
                               step_size=step_size)
+
    
     test = test.to_sequence(max_sequence_length=max_sequence_length,
                             min_sequence_length=min_sequence_length,
@@ -192,4 +208,7 @@ if __name__ == '__main__':
 
     mode = 'lstm'
     
-    run(train, test, validation, random_state, mode)
+    results, model = run(train, test, validation, random_state, mode)
+
+    # Testing for user-given movies
+
